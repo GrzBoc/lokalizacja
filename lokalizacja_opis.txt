@@ -1,0 +1,106 @@
+############################################################
+GEOPORTAL https://mapy.geoportal.gov.pl/ - pobieranie danych
+############################################################
+
+1. Usuń niepotrzebne (najlepiej wszystkie) informacje z map
+2. Odfiltruj w zawartości mapy: Dane do pobrania i A00_Granice_panstwa i A01_Granice_wojewodztw, można dalej ale to tylko do wyznaczania zakresu pobierania danych
+3. Następnie wybierz POBIERANIE DANYCH i usługe WFS
+4. Wybierz z listy rozwijalnej usługę:
+	- dla granic obszarów administracyjnych: Państwowy Rejestr Granic - Jednostki Terytorialne i potem obiekty - województwa, powiaty itd
+	- dla adresów: Krajowa Integracja Numeracji Adresowej i obiekty Punkty adresowe
+5. Wybierz Rysuj obszar i zakreśl na mapie - poziom powiatów to 40mb, gmin 140mb danych dla całego obszaru Polski, adresu tutaj wygenerowanie na raz całości jest mało realne
+6. Bo domknięciu obszaru, wybierz Pobierz Plik - wygenerowanie trwa, ściągany jest plik GML bez problemu obsługiwany w python przez geopandas
+
+7. NIESPRAWDZONE- jak pobrać dane ogólnogeogragiczne https://mapy.geoportal.gov.pl/imap/Imgp_2.html?gpmap=gp0- HYDROLOGIA
+ - wejść do geportalu, odszukać w Danych do pobrania -> Topografia -> Baza Danych Obiektów Ogólnogeograficznych -> kliknąć na obszar i sa do pobrania dane dla województw i całej Polski -> w pliku ZIP jest szereg GML i tam należy szukać tych dotyczące sieci wodnej [SW] 
+Sieć wodna (SW) według oficjalnej dokumentacji BDOO warstwa "sieć wodna" obejmuje takie klasy obiektów jak: rzeka, strumień, kanał, rów melioracyjny oraz zbiorniki wodne. Szczegółowo klasyfikacja obiektów pod kątem hydrologii zawarta jest w polach atrybutowych takich jak OT_SWRS (rzeka i strumień), OT_SWKN (kanał), OT_SWRM (rów melioracyjny) itd.
+Opis szczegółowy BDOO i jak pobierać dane https://www.geoportal.gov.pl/pl/dane/baza-danych-obiektow-ogolnogeograficznych-bdoo/
+
+##############################################
+Skrypt do rysowanie mapy na poziomie powiatów
+##############################################
+import geopandas as gpd
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# %%
+
+powiaty_gdf = gpd.read_file("ms_A02_Granice_powiatow.gml")
+powiaty_gdf["teryt_powiat"] = powiaty_gdf["JPT_KOD_JE"].str[:4]
+
+dane_xlsx = pd.read_excel("powiaty_firmy.xlsx", sheet_name="TABLICA",
+                         dtype={"teryt_powiat": str})
+
+# %%
+powiaty_gdf["teryt_powiat"] = powiaty_gdf["teryt_powiat"].astype(str)
+dane_xlsx["teryt_powiat"] = dane_xlsx["teryt_powiat"].astype(str)
+mapa = powiaty_gdf.merge(dane_xlsx[["teryt_powiat", "nazwa", "total"]], on="teryt_powiat", how="left")
+
+
+
+# %%
+
+# 5. Narysuj mapę kartogramu liczby przedsiębiorstw
+fig, ax = plt.subplots(1, 1, figsize=(12, 14))
+mapa.plot(column="total",
+          cmap="OrRd",
+          linewidth=0.8,
+          ax=ax,
+          edgecolor='0.8',
+          legend=True,
+          legend_kwds={'label': "Liczba przedsiębiorstw", 'shrink': 0.5})
+ax.set_title("Liczba przedsiębiorstw wg powiatów", fontsize=15)
+ax.axis('off')
+plt.show()
+
+
+########################################################
+Skrypt do punktów adresowych wraz z konfersją koordynat
+########################################################
+
+
+import geopandas as gpd
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+def dec_to_dms(deg):
+    """Konwersja stopni dziesiętnych na stopnie, minuty, sekundy."""
+    znak = '-' if deg < 0 else ''
+    deg = abs(deg)
+    d = int(deg)
+    m = int((deg - d) * 60)
+    s = (deg - d - m/60) * 3600
+    return f"{znak}{d}°{m}'{s:.2f}\""
+
+# Wczytaj punkty adresowe z pliku GML
+punkty_gdf = gpd.read_file("ms_prg-adresy.gml")
+
+#kodowanie koordynat widac w gml w srsName
+
+punkty_gdf['long_epsg2180'] = punkty_gdf.geometry.x
+punkty_gdf['latit_epsg2180'] = punkty_gdf.geometry.y
+
+punkty_wgs84 = punkty_gdf.to_crs(epsg=4326)
+punkty_gdf["long_wgs84"] = punkty_wgs84.geometry.x
+punkty_gdf["latit_wgs84"] = punkty_wgs84.geometry.y
+
+punkty_gdf["long_dms"] = punkty_gdf["long_wgs84"].apply(dec_to_dms)
+punkty_gdf["latit_dms"] = punkty_gdf["latit_wgs84"].apply(dec_to_dms)
+
+
+wybrane_kolumny =['gml_id', 'miejscowosc', 'ulica', 'numer', 'teryt', 'simc', 'ulic','kod',
+                  'long_epsg2180','latit_epsg2180',"long_wgs84","latit_wgs84","long_dms","latit_dms"]
+
+# Sprawdź, które z nich są obecne w danych
+istniejace_kolumny = [col for col in wybrane_kolumny if col in punkty_gdf.columns]
+
+# Wyciągnij tylko te kolumny oraz współrzędne geometryczne jako osobne kolumny x, y
+df_adresy = punkty_gdf[istniejace_kolumny].copy()
+
+
+# Jeśli chcesz, możesz przekonwertować GeoDataFrame do zwykłego DataFrame (bez geometrii)
+df_adresy = pd.DataFrame(df_adresy)
+
+# Podgląd danych
+print(df_adresy.head())

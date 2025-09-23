@@ -1,0 +1,142 @@
+
+# %%
+import geopandas as gpd
+import pandas as pd
+import xml.etree.ElementTree as ET
+
+def dec_to_dms(deg):
+    """Konwersja stopni dziesiętnych na stopnie, minuty, sekundy."""
+    znak = '-' if deg < 0 else ''
+    deg = abs(deg)
+    d = int(deg)
+    m = int((deg - d) * 60)
+    s = (deg - d - m/60) * 3600
+    return f"{znak}{d}°{m}'{s:.2f}\""
+
+# %%
+gdf = gpd.read_file("D:/04_edu/15_geolokalizacja/000_FIN/POLSKA/PRG_PunktyAdresowe_POLSKA.shp", encoding="utf-8")
+print(gdf.crs)  #informacja o kodowaniu
+#gdf_wgs84 = gdf.to_crs('EPSG:4326') # jeżeli potrzebne i potem na stopnie/minuty
+# gdf_wgs84["long_wgs84"] = gdf_wgs84.geometry.x
+# gdf_wgs84["latit_wgs84"] = gdf_wgs84.geometry.y
+# gdf_wgs84["long_dms"] = gdf_wgs84["long_wgs84"].apply(dec_to_dms)
+# gdf_wgs84["latit_dms"] = gdf_wgs84["latit_wgs84"].apply(dec_to_dms)
+
+# %%
+# gdf2 =gpd.read_file("D:/tam_gdzie_to_jest/PRG_PunktyAdresowe_POLSKA.shp",rows=1000, encoding="utf-8")
+# gdf2.head(1)
+
+# %%
+
+# ogika słowników podziału terytorialnego
+# https://eteryt.stat.gov.pl/eTeryt/rejestr_teryt/udostepnianie_danych/zasady_implementacji_slownikow/zasady_implementacji_slownikow.aspx?contrast=default
+# struktury danych
+# https://eteryt.stat.gov.pl/eTeryt/rejestr_teryt/udostepnianie_danych/baza_teryt/uzytkownicy_indywidualni/pobieranie/pliki_pelne_struktury.aspx
+# 
+# dane - wersja adresowa
+# https://eteryt.stat.gov.pl/eTeryt/rejestr_teryt/udostepnianie_danych/baza_teryt/uzytkownicy_indywidualni/pobieranie/pliki_pelne.aspx?contrast=default
+# TERYT (TERC) - powiaty i gminy nie sa unikalne
+# SIMC (miejscowości) - są unilalne
+# ULIC  - nie są unikalne
+# WMRODZ (słownik rodzaj miejscowości)
+
+folder="D:/04_edu/15_geolokalizacja/000_FIN/"
+#dict_teryt='TERC_Adresowy_2025-09-23.xml' - adresowy nie ma gmin  3 miejskp-wiejskich rozbijanych ma 4,5
+dict_teryt='TERC_Urzedowy_2025-09-23.xml'
+dict_rm="WMRODZ_2025-09-23.xml"
+dict_simc="SIMC_Adresowy_2025-09-23.xml"
+dict_ulic="ULIC_Adresowy_2025-09-23.xml"
+
+
+# %% TERYT
+
+# Parsowanie pliku XML
+tree = ET.parse(folder+dict_teryt)
+root = tree.getroot()
+
+catalog = root.find('catalog')
+rows = catalog.findall('row')
+all_data = []
+for row in rows:
+    data = {child.tag: child.text for child in row}
+    all_data.append(data)
+df = pd.DataFrame(all_data)
+df['POW_id']=df['WOJ']+df['POW']
+df['TERYT']=df['WOJ']+df['POW']+df['GMI']+df['RODZ']
+
+woj=df[ df['POW'].isna() ]
+powiat=df[ df['GMI'].isna() & df['POW'].notna() ]
+gmina=df[ df['GMI'].notna()  ]
+
+teryt=pd.merge(gmina.loc[:,['TERYT','WOJ','POW','GMI','RODZ','NAZWA_DOD','NAZWA','POW_id']], 
+                            powiat.loc[:,['POW','NAZWA_DOD','NAZWA','POW_id']], 
+                            how='left', left_on='POW_id', right_on='POW_id')
+teryt=pd.merge(teryt,woj.loc[:,['WOJ','NAZWA']], how='left', left_on='WOJ', right_on='WOJ')
+
+teryt_cols=['TERYT', 'WOJ', 'POW_x', 'GMI', 'RODZ', 'NAZWA_DOD_x', 'NAZWA_x',
+         'NAZWA_DOD_y', 'NAZWA_y', 'NAZWA']
+teryt=teryt.loc[:,teryt_cols]
+teryt.columns=['TERYT', 'WOJ', 'POW', 'GMI', 'RODZ', 'gmi_rodz', 'gmina','pow_rodz','powiat','wojewodztwo']
+teryt
+
+
+# %%  RODZAJ MIEJSCOWOŚCI
+tree = ET.parse(folder+dict_rm)
+root = tree.getroot()
+
+catalog = root.find('catalog')
+rows = catalog.findall('row')
+all_data = []
+for row in rows:
+    data = {child.tag: child.text for child in row}
+    all_data.append(data)
+df = pd.DataFrame(all_data)
+
+rodzaj_miejscowosci=df  # kody 00 i 99 nie występują w urzędowych SIMC
+
+# %%  MIEJSCOWOŚCI SIMC -  SYM jest unikalnym kluczem po podziałach
+tree = ET.parse(folder+dict_simc)
+root = tree.getroot()
+
+catalog = root.find('catalog')
+rows = catalog.findall('row')
+all_data = []
+for row in rows:
+    data = {child.tag: child.text for child in row}
+    all_data.append(data)
+df = pd.DataFrame(all_data)
+df['TERYT']=df['WOJ']+df['POW']+df['GMI']+df['RODZ_GMI']
+df=pd.merge(df,rodzaj_miejscowosci, how='left', left_on='RM', right_on='RM')
+df_cols=[ 'TERYT','WOJ', 'POW', 'GMI', 'RODZ_GMI', 'RM', 'MZ', 'SYM', 'NAZWA', 'NAZWA_RM']
+df=df.loc[:,df_cols]
+df.columns=[ 'TERYT','WOJ', 'POW', 'GMI', 'RODZ_GMI', 'RM', 'MZ', 'SYM', 'MIEJSCOWOSC', 'NAZWA_RM']
+miejscowosci=df  #kolumna SYM to kod podstawowy
+miejscowosci.head(10)
+
+# %%  ULICE
+# SYM_UL mogą sie powtarzać po miejscowościach (SYM) no i Teryt oczywiscie
+tree = ET.parse(folder+dict_ulic)
+root = tree.getroot()
+
+catalog = root.find('catalog')
+rows = catalog.findall('row')
+all_data = []
+for row in rows:
+    data = {child.tag: child.text for child in row}
+    all_data.append(data)
+df = pd.DataFrame(all_data)
+
+df['TERYT']=df['WOJ']+df['POW']+df['GMI']+df['RODZ_GMI']
+df=df.loc[:,['TERYT','WOJ', 'POW', 'GMI', 'RODZ_GMI', 'SYM', 'SYM_UL', 'CECHA', 'NAZWA_1','NAZWA_2']]
+
+df=pd.merge(df,miejscowosci.loc[:,['SYM','RM','MZ','MIEJSCOWOSC','NAZWA_RM']], how='left', left_on='SYM', right_on='SYM')
+df=pd.merge(df,teryt.loc[:,['TERYT','wojewodztwo','powiat', 'pow_rodz','gmina','gmi_rodz']], how='left', left_on='TERYT', right_on='TERYT')
+
+ulice=df.loc[:,['TERYT', 'WOJ', 'POW', 'GMI', 'RODZ_GMI','SYM_UL', 'CECHA','NAZWA_1', 'NAZWA_2', 'SYM', 'RM', 'MZ','MIEJSCOWOSC', 'NAZWA_RM','gmina', 'gmi_rodz','powiat', 'pow_rodz','wojewodztwo']]
+ulice.head(10)
+        
+# %%%
+
+pna=pd.merge(gdf,ulice, how='left',left_on=['SIMC_id','ULIC_id'],right_on=['SYM','SYM_UL'])
+# %%
+pna.to_parquet('dane_wyjsciowe.geoparquet')

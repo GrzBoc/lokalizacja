@@ -1,0 +1,110 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import sounddevice as sd
+import soundfile as sf
+import threading
+import time
+import os
+from datetime import datetime
+
+CHUNK_SECONDS = 10 * 60  # 10 minut
+
+class RecorderApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Podwójny rejestrator audio")
+        self.recording = False
+        self.thread1 = None
+        self.thread2 = None
+        
+        # Domyślne ścieżki i urządzenia
+        self.save_path = tk.StringVar(value=os.getcwd())
+        self.device1 = tk.StringVar()  # system audio ("Stereo Mix")
+        self.device2 = tk.StringVar()  # mikrofon
+
+        devices = [d['name'] for d in sd.query_devices() if d['max_input_channels'] > 0]
+        # System
+        tk.Label(root, text="Wybierz urządzenie SYSTEMOWE (np. 'Stereo Mix')").pack()
+        self.device1_menu = tk.OptionMenu(root, self.device1, *devices)
+        self.device1_menu.pack()
+        # Mikrofon
+        tk.Label(root, text="Wybierz urządzenie MIKROFON").pack()
+        self.device2_menu = tk.OptionMenu(root, self.device2, *devices)
+        self.device2_menu.pack()
+        # Katalog zapisu
+        tk.Label(root, text="Lokalizacja zapisu:").pack()
+        self.path_entry = tk.Entry(root, textvariable=self.save_path, width=60)
+        self.path_entry.pack()
+        tk.Button(root, text="Wybierz folder", command=self.choose_path).pack()
+        # Przyciski i status
+        self.start_button = tk.Button(root, text="Start nagrania", command=self.start_recording, bg="green")
+        self.start_button.pack(pady=8)
+        self.stop_button = tk.Button(root, text="Stop nagrania", command=self.stop_recording, state='disabled', bg="red")
+        self.stop_button.pack()
+        self.status = tk.Label(root, text="", fg='blue')
+        self.status.pack(pady=8)
+    
+    def choose_path(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.save_path.set(folder)
+
+    def start_recording(self):
+        if not self.device1.get() or not self.device2.get():
+            messagebox.showerror("Błąd", "Wybierz oba urządzenia nagrywania!")
+            return
+        if self.device1.get() == self.device2.get():
+            messagebox.showerror("Błąd", "Urządzenia muszą być różne!")
+            return
+        self.recording = True
+        self.start_button['state'] = 'disabled'
+        self.stop_button['state'] = 'normal'
+        self.status['text'] = "Nagrywanie..."
+        self.thread1 = threading.Thread(target=self.record_chunks, args=(self.device1.get(), 'system',))
+        self.thread2 = threading.Thread(target=self.record_chunks, args=(self.device2.get(), 'mic',))
+        self.thread1.start()
+        self.thread2.start()
+
+    def stop_recording(self):
+        self.recording = False
+        self.start_button['state'] = 'normal'
+        self.stop_button['state'] = 'disabled'
+        self.status['text'] = "Nagranie zatrzymane!"
+
+    def record_chunks(self, device_name, tag):
+        fs = 44100
+        channels = 2
+        idx = 1
+        device_idx = None
+        for i, d in enumerate(sd.query_devices()):
+            if device_name in d['name']:
+                device_idx = i
+                break
+        if device_idx is None:
+            self.status['text'] += f"\nNie znaleziono: {device_name}"
+            return
+        while self.recording:
+            ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            filename = os.path.join(self.save_path.get(), f"{tag}_{ts}_chunk{idx}.flac")
+            self.status['text'] = f"Nagrywanie: {tag} chunk {idx}"
+            rec = sd.rec(int(CHUNK_SECONDS * fs), samplerate=fs, channels=channels, device=device_idx)
+            elapsed = 0
+            while self.recording and elapsed < CHUNK_SECONDS:
+                time.sleep(0.2)
+                elapsed += 0.2
+            sd.stop()
+            sf.write(filename, rec[:int(elapsed * fs)], fs, format='FLAC')
+            idx += 1
+        self.status['text'] = f"Nagranie zakończone: {tag}"
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = RecorderApp(root)
+    root.mainloop()
+
+ 
+Instrukcja:
+•	Wybierz oba urządzenia wejściowe – np. "Stereo Mix" (lub inne wyjście systemowe) i mikrofon.
+•	Wskaż katalog zapisu.
+•	Każdy strumień zapisuje osobny plik FLAC co 10 minut.
+•	Nagranie STOPuje się natychmiast dla obu źródeł.
